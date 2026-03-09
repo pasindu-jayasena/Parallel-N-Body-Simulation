@@ -1,25 +1,4 @@
 # Parallel N-Body Simulation
-## EE7218/EC7207: High Performance Computing
-
----
-
-## Project Structure()
-
-```
-HPCPresentation/
-├── README.md               ← This file (full documentation)
-├── include/
-│   └── nbody.h             ← Shared types and constants
-└── src/
-    ├── common.c            ← Shared utility functions (used by ALL programs)
-    ├── serial.c            ← Deliverable 1: Serial Code
-    ├── openmp.c            ← Deliverable 2: Shared Memory (OpenMP)
-    ├── pthreads.c          ← Deliverable 2: Shared Memory (POSIX Threads)
-    ├── mpi_nbody.c         ← Deliverable 3: Distributed Memory (MPI)
-    ├── cuda_nbody.cu       ← CUDA GPU version
-    └── hybrid.c            ← Deliverable 4: Hybrid (MPI + OpenMP)
-```
-
 ---
 
 ## Prerequisites
