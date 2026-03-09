@@ -1,193 +1,122 @@
-/**
- * @file cuda_nbody.cu
- * @brief CUDA GPU-accelerated N-Body simulation.
- *
- * Each GPU thread computes the total gravitational force on one body.
- * Uses shared memory tiling to reduce global memory bandwidth pressure:
- * bodies are loaded in tiles into shared memory, and all threads in a
- * block reuse the tile for their force accumulations.
- *
- * Usage:  ./nbody_cuda <N> <steps>
- */
-
-#include <cuda_runtime.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <cuda_runtime.h>
+#include "nbody.h"
 
-
-/* ---- Include C headers (compiled as C++) ---- */
-extern "C" {
-#include "nbody_common.h"
-#include "nbody_io.h"
-#include "nbody_types.h"
-
-}
-
-/** Number of threads per CUDA block */
 #define BLOCK_SIZE 256
 
-/*---------------------------------------------------------------------------
- * CUDA Error Check Macro
- *---------------------------------------------------------------------------*/
+#define CUDA_CHECK(call) do {                                         \
+    cudaError_t err = call;                                           \
+    if (err != cudaSuccess) {                                         \
+        fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));\
+        exit(1);                                                      \
+    }                                                                 \
+} while (0)
 
-#define CUDA_CHECK(call)                                                       \
-  do {                                                                         \
-    cudaError_t err = call;                                                    \
-    if (err != cudaSuccess) {                                                  \
-      fprintf(stderr, "CUDA Error: %s at %s:%d\n", cudaGetErrorString(err),    \
-              __FILE__, __LINE__);                                             \
-      exit(EXIT_FAILURE);                                                      \
-    }                                                                          \
-  } while (0)
+__global__ void compute_forces_kernel(Body *bodies, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
 
-/*---------------------------------------------------------------------------
- * Device Kernel — Force Computation with Shared Memory Tiling
- *---------------------------------------------------------------------------*/
+    double px = bodies[i].x, py = bodies[i].y, pz = bodies[i].z;
+    double mi = bodies[i].mass;
+    double fx = 0.0, fy = 0.0, fz = 0.0;
 
-/**
- * Each thread computes the net force on one body.
- * Bodies are loaded in tiles of BLOCK_SIZE into shared memory so that
- * global memory reads are coalesced and reused within the block.
- *
- * @param d_bodies  Device body array.
- * @param n         Total number of bodies.
- */
-__global__ void compute_forces_kernel(Body *d_bodies, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n)
-    return;
+    __shared__ double sx[BLOCK_SIZE], sy[BLOCK_SIZE];
+    __shared__ double sz[BLOCK_SIZE], sm[BLOCK_SIZE];
 
-  double px = d_bodies[i].x;
-  double py = d_bodies[i].y;
-  double pz = d_bodies[i].z;
-  double mi = d_bodies[i].mass;
+    int tiles = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    for (int t = 0; t < tiles; t++) {
+        int j = t * BLOCK_SIZE + threadIdx.x;
+        if (j < n) {
+            sx[threadIdx.x] = bodies[j].x;
+            sy[threadIdx.x] = bodies[j].y;
+            sz[threadIdx.x] = bodies[j].z;
+            sm[threadIdx.x] = bodies[j].mass;
+        } else {
+            sx[threadIdx.x] = sy[threadIdx.x] = sz[threadIdx.x] = 0.0;
+            sm[threadIdx.x] = 0.0;
+        }
+        __syncthreads();
 
-  double fx = 0.0, fy = 0.0, fz = 0.0;
+        for (int k = 0; k < BLOCK_SIZE; k++) {
+            int gj = t * BLOCK_SIZE + k;
+            if (gj >= n || gj == i) continue;
 
-  /* Shared memory tile for a block of bodies */
-  __shared__ double tile_x[BLOCK_SIZE];
-  __shared__ double tile_y[BLOCK_SIZE];
-  __shared__ double tile_z[BLOCK_SIZE];
-  __shared__ double tile_mass[BLOCK_SIZE];
+            double dx = sx[k] - px, dy = sy[k] - py, dz = sz[k] - pz;
+            double dist_sq  = dx*dx + dy*dy + dz*dz + SOFTENING;
+            double inv_dist = rsqrt(dist_sq);
+            double force    = G * mi * sm[k] * inv_dist * inv_dist * inv_dist;
 
-  int num_tiles = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-  for (int tile = 0; tile < num_tiles; tile++) {
-    int j = tile * BLOCK_SIZE + threadIdx.x;
-
-    /* Load tile into shared memory */
-    if (j < n) {
-      tile_x[threadIdx.x] = d_bodies[j].x;
-      tile_y[threadIdx.x] = d_bodies[j].y;
-      tile_z[threadIdx.x] = d_bodies[j].z;
-      tile_mass[threadIdx.x] = d_bodies[j].mass;
-    } else {
-      tile_x[threadIdx.x] = 0.0;
-      tile_y[threadIdx.x] = 0.0;
-      tile_z[threadIdx.x] = 0.0;
-      tile_mass[threadIdx.x] = 0.0;
+            fx += force * dx;
+            fy += force * dy;
+            fz += force * dz;
+        }
+        __syncthreads();
     }
-    __syncthreads();
 
-    /* Compute interactions with all bodies in the tile */
-    for (int k = 0; k < BLOCK_SIZE; k++) {
-      int global_j = tile * BLOCK_SIZE + k;
-      if (global_j >= n || global_j == i)
-        continue;
-
-      double dx = tile_x[k] - px;
-      double dy = tile_y[k] - py;
-      double dz = tile_z[k] - pz;
-
-      double dist_sq = dx * dx + dy * dy + dz * dz + SOFTENING;
-      double inv_dist = rsqrt(dist_sq); /* fast reciprocal sqrt */
-      double inv_dist3 = inv_dist * inv_dist * inv_dist;
-
-      double force = G * mi * tile_mass[k] * inv_dist3;
-
-      fx += force * dx;
-      fy += force * dy;
-      fz += force * dz;
-    }
-    __syncthreads();
-  }
-
-  d_bodies[i].fx = fx;
-  d_bodies[i].fy = fy;
-  d_bodies[i].fz = fz;
+    bodies[i].fx = fx;
+    bodies[i].fy = fy;
+    bodies[i].fz = fz;
 }
 
-/*---------------------------------------------------------------------------
- * Device Kernel — Position & Velocity Update
- *---------------------------------------------------------------------------*/
+__global__ void update_kernel(Body *bodies, int n, double dt) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
 
-__global__ void update_positions_kernel(Body *d_bodies, int n, double dt) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n)
-    return;
-
-  d_bodies[i].vx += (d_bodies[i].fx / d_bodies[i].mass) * dt;
-  d_bodies[i].vy += (d_bodies[i].fy / d_bodies[i].mass) * dt;
-  d_bodies[i].vz += (d_bodies[i].fz / d_bodies[i].mass) * dt;
-
-  d_bodies[i].x += d_bodies[i].vx * dt;
-  d_bodies[i].y += d_bodies[i].vy * dt;
-  d_bodies[i].z += d_bodies[i].vz * dt;
+    bodies[i].vx += (bodies[i].fx / bodies[i].mass) * dt;
+    bodies[i].vy += (bodies[i].fy / bodies[i].mass) * dt;
+    bodies[i].vz += (bodies[i].fz / bodies[i].mass) * dt;
+    bodies[i].x  += bodies[i].vx * dt;
+    bodies[i].y  += bodies[i].vy * dt;
+    bodies[i].z  += bodies[i].vz * dt;
 }
-
-/*---------------------------------------------------------------------------
- * Main
- *---------------------------------------------------------------------------*/
 
 int main(int argc, char **argv) {
-  int n, steps, dummy;
-  parse_args(argc, argv, &n, &steps, &dummy);
+    int n     = (argc > 1) ? atoi(argv[1]) : DEFAULT_N;
+    int steps = (argc > 2) ? atoi(argv[2]) : DEFAULT_STEPS;
 
-  printf("=== CUDA N-Body Simulation ===\n");
-  printf("Bodies: %d | Steps: %d | Block Size: %d\n\n", n, steps, BLOCK_SIZE);
+    printf("=== CUDA N-Body Simulation ===\n");
+    printf("Bodies: %d | Steps: %d\n\n", n, steps);
 
-  /* Host allocation and initialisation */
-  Body *h_bodies = (Body *)malloc(n * sizeof(Body));
-  if (!h_bodies) {
-    fprintf(stderr, "Error: host memory allocation failed.\n");
-    return EXIT_FAILURE;
-  }
-  init_bodies(h_bodies, n, DEFAULT_SEED);
+    Body *serial_bodies = (Body *)malloc(n * sizeof(Body));
+    Body *h_bodies      = (Body *)malloc(n * sizeof(Body));
+    init_bodies(serial_bodies, n);
+    memcpy(h_bodies, serial_bodies, n * sizeof(Body));
 
-  /* Device allocation */
-  Body *d_bodies;
-  CUDA_CHECK(cudaMalloc(&d_bodies, n * sizeof(Body)));
-  CUDA_CHECK(
-      cudaMemcpy(d_bodies, h_bodies, n * sizeof(Body), cudaMemcpyHostToDevice));
+    double t1 = get_time_sec();
+    for (int s = 0; s < steps; s++) {
+        compute_forces(serial_bodies, n);
+        update_positions(serial_bodies, n, DT);
+    }
+    double serial_time = get_time_sec() - t1;
 
-  /* Kernel launch configuration */
-  int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    Body *d_bodies;
+    CUDA_CHECK(cudaMalloc(&d_bodies, n * sizeof(Body)));
+    CUDA_CHECK(cudaMemcpy(d_bodies, h_bodies, n * sizeof(Body), cudaMemcpyHostToDevice));
 
-  /* Run simulation */
-  double t_start = get_time_sec();
+    int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-  for (int step = 0; step < steps; step++) {
-    compute_forces_kernel<<<grid_size, BLOCK_SIZE>>>(d_bodies, n);
-    update_positions_kernel<<<grid_size, BLOCK_SIZE>>>(d_bodies, n, DT);
-    CUDA_CHECK(cudaDeviceSynchronize());
-  }
+    double t2 = get_time_sec();
+    for (int s = 0; s < steps; s++) {
+        compute_forces_kernel<<<grid, BLOCK_SIZE>>>(d_bodies, n);
+        update_kernel<<<grid, BLOCK_SIZE>>>(d_bodies, n, DT);
+        cudaDeviceSynchronize();
+    }
+    double cuda_time = get_time_sec() - t2;
 
-  double t_end = get_time_sec();
-  double elapsed = t_end - t_start;
+    CUDA_CHECK(cudaMemcpy(h_bodies, d_bodies, n * sizeof(Body), cudaMemcpyDeviceToHost));
 
-  /* Copy results back to host */
-  CUDA_CHECK(
-      cudaMemcpy(h_bodies, d_bodies, n * sizeof(Body), cudaMemcpyDeviceToHost));
+    double rmse = compute_rmse(serial_bodies, h_bodies, n);
 
-  print_timing("CUDA", n, steps, elapsed);
+    printf("Serial Time: %.4f seconds\n", serial_time);
+    printf("CUDA Time:   %.4f seconds\n", cuda_time);
+    printf("Speedup:     %.2fx\n", serial_time / cuda_time);
+    printf("RMSE:        %.6e\n", rmse);
 
-  save_positions("results/cuda_output.csv", h_bodies, n);
-  printf("Results saved to results/cuda_output.csv\n");
-
-  /* Cleanup */
-  cudaFree(d_bodies);
-  free(h_bodies);
-
-  return EXIT_SUCCESS;
+    cudaFree(d_bodies);
+    free(serial_bodies);
+    free(h_bodies);
+    return 0;
 }

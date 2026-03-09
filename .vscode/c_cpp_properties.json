@@ -1,0 +1,23 @@
+{
+    "configurations": [
+        {
+            "name": "Linux (WSL)",
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c99",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/include",
+                "/usr/include",
+                "/usr/local/include",
+                "/usr/lib/x86_64-linux-gnu/openmpi/include",
+                "/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi"
+            ],
+            "defines": [
+                "_POSIX_C_SOURCE=200809L",
+                "_GNU_SOURCE"
+            ]
+        }
+    ],
+    "version": 4
+}

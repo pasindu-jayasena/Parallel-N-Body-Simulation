@@ -3,11 +3,9 @@
 #include <string.h>
 #include <math.h>
 #include <mpi.h>
-#include <omp.h>
 #include "nbody.h"
 
-void compute_forces_hybrid(Body *bodies, int n, int start, int local_n) {
-    #pragma omp parallel for schedule(dynamic)
+void compute_forces_local(Body *bodies, int n, int start, int local_n) {
     for (int i = start; i < start + local_n; i++) {
         double fx = 0.0, fy = 0.0, fz = 0.0;
         for (int j = 0; j < n; j++) {
@@ -31,8 +29,7 @@ void compute_forces_hybrid(Body *bodies, int n, int start, int local_n) {
     }
 }
 
-void update_hybrid(Body *bodies, int start, int local_n) {
-    #pragma omp parallel for
+void update_local(Body *bodies, int start, int local_n) {
     for (int i = start; i < start + local_n; i++) {
         bodies[i].vx += (bodies[i].fx / bodies[i].mass) * DT;
         bodies[i].vy += (bodies[i].fy / bodies[i].mass) * DT;
@@ -44,8 +41,7 @@ void update_hybrid(Body *bodies, int start, int local_n) {
 }
 
 int main(int argc, char **argv) {
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+    MPI_Init(&argc, &argv);
 
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -55,9 +51,8 @@ int main(int argc, char **argv) {
     int steps = (argc > 2) ? atoi(argv[2]) : DEFAULT_STEPS;
 
     if (rank == 0) {
-        printf("=== Hybrid (MPI + OpenMP) N-Body Simulation ===\n");
-        printf("Bodies: %d | Steps: %d | MPI: %d | OMP: %d\n\n",
-               n, steps, size, omp_get_max_threads());
+        printf("=== MPI N-Body Simulation ===\n");
+        printf("Bodies: %d | Steps: %d | Processes: %d\n\n", n, steps, size);
     }
 
     Body *bodies = (Body *)malloc(n * sizeof(Body));
@@ -85,18 +80,18 @@ int main(int argc, char **argv) {
     int *counts = (int *)malloc(size * sizeof(int));
     int *displs = (int *)malloc(size * sizeof(int));
     for (int r = 0; r < size; r++) {
-        int r_n   = chunk + (r < remainder ? 1 : 0);
-        int r_s   = r * chunk + (r < remainder ? r : remainder);
-        counts[r] = r_n * (int)sizeof(Body);
-        displs[r] = r_s * (int)sizeof(Body);
+        int r_n    = chunk + (r < remainder ? 1 : 0);
+        int r_s    = r * chunk + (r < remainder ? r : remainder);
+        counts[r]  = r_n * (int)sizeof(Body);
+        displs[r]  = r_s * (int)sizeof(Body);
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
     double t2 = MPI_Wtime();
 
     for (int s = 0; s < steps; s++) {
-        compute_forces_hybrid(bodies, n, start, local_n);
-        update_hybrid(bodies, start, local_n);
+        compute_forces_local(bodies, n, start, local_n);
+        update_local(bodies, start, local_n);
 
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_BYTE,
                        bodies, counts, displs, MPI_BYTE,

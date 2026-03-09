@@ -1,0 +1,20 @@
+# Compiled binaries
+nbody_serial
+nbody_openmp
+nbody_pthreads
+nbody_mpi
+nbody_cuda
+nbody_hybrid
+
+# Object files
+*.o
+*.a
+
+# Build outputs
+build/
+
+# Results (generated data)
+results/
+
+# VS Code (optional — remove this block if you want .vscode tracked)
+# .vscode/
