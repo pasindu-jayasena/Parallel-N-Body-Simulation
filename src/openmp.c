@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// parallel force computation — each thread handles a different body i
+// parallel force computation —each thread handles a different body i
 void compute_forces_omp(Body *bodies, int n) {
 #pragma omp parallel for schedule(dynamic)
   for (int i = 0; i < n; i++) {
