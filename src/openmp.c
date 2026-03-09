@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// parallel force computation — each thread handles a different body i
 void compute_forces_omp(Body *bodies, int n) {
 #pragma omp parallel for schedule(dynamic)
   for (int i = 0; i < n; i++) {
@@ -25,6 +26,7 @@ void compute_forces_omp(Body *bodies, int n) {
       fy += force * dy;
       fz += force * dz;
     }
+    // safe to write — each thread writes to a different body[i]
     bodies[i].fx = fx;
     bodies[i].fy = fy;
     bodies[i].fz = fz;
@@ -41,12 +43,14 @@ int main(int argc, char **argv) {
   printf("=== OpenMP N-Body Simulation ===\n");
   printf("Bodies: %d | Steps: %d | Threads: %d\n\n", n, steps, threads);
 
+  // two copies: one runs serial (reference), one runs parallel
   Body *serial_bodies = (Body *)malloc(n * sizeof(Body));
   Body *parallel_bodies = (Body *)malloc(n * sizeof(Body));
 
   init_bodies(serial_bodies, n);
-  memcpy(parallel_bodies, serial_bodies, n * sizeof(Body));
+  memcpy(parallel_bodies, serial_bodies, n * sizeof(Body)); // identical start
 
+  // run serial version to use as reference for RMSE
   double t1 = get_time_sec();
   for (int s = 0; s < steps; s++) {
     compute_forces(serial_bodies, n);
@@ -54,6 +58,7 @@ int main(int argc, char **argv) {
   }
   double serial_time = get_time_sec() - t1;
 
+  // run OpenMP parallel version
   double t2 = get_time_sec();
   for (int s = 0; s < steps; s++) {
     compute_forces_omp(parallel_bodies, n);
@@ -66,10 +71,9 @@ int main(int argc, char **argv) {
   printf("Serial Time:   %.4f seconds\n", serial_time);
   printf("Parallel Time: %.4f seconds\n", parallel_time);
   printf("Speedup:       %.2fx\n", serial_time / parallel_time);
-  printf("RMSE:          %.6e\n", rmse);
-
+  printf("RMSE:          %.6e\n", rmse); // 0.0 = correct result
+  
   free(serial_bodies);
   free(parallel_bodies);
   return 0;
 }
-//

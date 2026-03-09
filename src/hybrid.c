@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// MPI divides bodies across processes, OpenMP parallelizes within each process
 void compute_forces_hybrid(Body *bodies, int n, int start, int local_n) {
 #pragma omp parallel for schedule(dynamic)
   for (int i = start; i < start + local_n; i++) {
@@ -46,6 +47,7 @@ void update_hybrid(Body *bodies, int start, int local_n) {
 
 int main(int argc, char **argv) {
   int provided;
+  // MPI_THREAD_FUNNELED: only the main thread makes MPI calls
   MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
 
   int rank, size;
@@ -64,6 +66,7 @@ int main(int argc, char **argv) {
   Body *bodies = (Body *)malloc(n * sizeof(Body));
   init_bodies(bodies, n);
 
+  // rank 0 runs serial to compare results
   Body *serial_ref = NULL;
   double serial_time = 0.0;
   if (rank == 0) {
@@ -78,6 +81,7 @@ int main(int argc, char **argv) {
     serial_time = get_time_sec() - t1;
   }
 
+  // distribute bodies across MPI ranks
   int chunk = n / size;
   int remainder = n % size;
   int local_n = chunk + (rank < remainder ? 1 : 0);
@@ -96,9 +100,10 @@ int main(int argc, char **argv) {
   double t2 = MPI_Wtime();
 
   for (int s = 0; s < steps; s++) {
-    compute_forces_hybrid(bodies, n, start, local_n);
+    compute_forces_hybrid(bodies, n, start, local_n); // MPI + OpenMP
     update_hybrid(bodies, start, local_n);
 
+    // gather updated positions from all MPI ranks
     MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_BYTE, bodies, counts, displs, MPI_BYTE,
                    MPI_COMM_WORLD);
   }
@@ -122,4 +127,3 @@ int main(int argc, char **argv) {
   MPI_Finalize();
   return 0;
 }
-//

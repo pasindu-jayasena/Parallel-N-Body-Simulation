@@ -7,7 +7,7 @@
 #include <time.h>
 
 void init_bodies(Body *bodies, int n) {
-  srand(SEED);
+  srand(SEED); // fix seed so all versions start with same data
   for (int i = 0; i < n; i++) {
     bodies[i].x = ((double)rand() / RAND_MAX) * 100.0 - 50.0;
     bodies[i].y = ((double)rand() / RAND_MAX) * 100.0 - 50.0;
@@ -22,16 +22,18 @@ void init_bodies(Body *bodies, int n) {
   }
 }
 
+// serial all-pairs force calculation (O(N^2))
 void compute_forces(Body *bodies, int n) {
   for (int i = 0; i < n; i++) {
     double fx = 0.0, fy = 0.0, fz = 0.0;
     for (int j = 0; j < n; j++) {
       if (i == j)
-        continue;
+        continue; // skip self
       double dx = bodies[j].x - bodies[i].x;
       double dy = bodies[j].y - bodies[i].y;
       double dz = bodies[j].z - bodies[i].z;
 
+      // Newton's law: F = G * m1 * m2 / r^2
       double dist_sq = dx * dx + dy * dy + dz * dz + SOFTENING;
       double inv_dist = 1.0 / sqrt(dist_sq);
       double force =
@@ -47,17 +49,21 @@ void compute_forces(Body *bodies, int n) {
   }
 }
 
+// update velocity and position using Euler integration
 void update_positions(Body *bodies, int n, double dt) {
   for (int i = 0; i < n; i++) {
+    // a = F/m,  v = v + a*dt
     bodies[i].vx += (bodies[i].fx / bodies[i].mass) * dt;
     bodies[i].vy += (bodies[i].fy / bodies[i].mass) * dt;
     bodies[i].vz += (bodies[i].fz / bodies[i].mass) * dt;
+    // x = x + v*dt
     bodies[i].x += bodies[i].vx * dt;
     bodies[i].y += bodies[i].vy * dt;
     bodies[i].z += bodies[i].vz * dt;
   }
 }
 
+// compare positions between serial and parallel results
 double compute_rmse(const Body *a, const Body *b, int n) {
   double sum = 0.0;
   for (int i = 0; i < n; i++) {
@@ -66,12 +72,12 @@ double compute_rmse(const Body *a, const Body *b, int n) {
     double dz = a[i].z - b[i].z;
     sum += dx * dx + dy * dy + dz * dz;
   }
-  return sqrt(sum / n);
+  return sqrt(sum / n); // 0.0 means perfect match
 }
 
+// high resolution wall clock timer
 double get_time_sec(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
-//

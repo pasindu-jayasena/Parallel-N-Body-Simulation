@@ -14,8 +14,8 @@ int main(int argc, char **argv) {
 
   double start = get_time_sec();
   for (int s = 0; s < steps; s++) {
-    compute_forces(bodies, n);
-    update_positions(bodies, n, DT);
+    compute_forces(bodies, n);      // calculate forces between all pairs
+    update_positions(bodies, n, DT); // move bodies based on forces
   }
   double elapsed = get_time_sec() - start;
 
@@ -24,4 +24,3 @@ int main(int argc, char **argv) {
   free(bodies);
   return 0;
 }
-//
